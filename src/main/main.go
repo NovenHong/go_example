@@ -4,12 +4,7 @@ import (
 	"fmt"
 )
 
-func init() {
-	
-}
-
-func main()  {
-
+func main() {
 	fmt.Println("hello world")
-
+	
 }
