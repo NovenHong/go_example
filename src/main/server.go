@@ -23,39 +23,80 @@ type User struct {
 	tp.CallCtx
 }
 
-func (u *User) Login(arg *[]byte) (string,*tp.Status) {
+var (
+	SessionMap []tp.CtxSession
+)
+
+func (u *User) Login(arg *[]byte) ([]byte,*tp.Status) {
+
+	var userinfo map[string]interface{}
+	err := json.Unmarshal(*arg,&userinfo)
+	if err != nil {
+		return []byte(""),tp.NewStatus(1001, "json parse error", err.Error())
+	}
+	
+	var result []byte
+
+	if(userinfo["username"] == "nana" && userinfo["password"] == "123456"){
+		sess := u.Session()
+		SessionMap = append(SessionMap,sess)
+
+		result,_ = json.Marshal(Success{Code:0,Message:"login success"})
+		return result,nil
+	}
+
+	result,_ = json.Marshal(Error{Code:1001,Message:"username or password is not correct"})
+	return result,nil
+}
+
+func (u *User) Register(arg *[]byte) (string,*tp.Status) {
 
 	var userinfo map[string]interface{}
 	err := json.Unmarshal(*arg,&userinfo)
 	if err != nil {
 		return "",tp.NewStatus(1001, "json parse error", err.Error())
 	}
-	fmt.Println(userinfo)
-	
-	var result []byte
 
-	if(userinfo["username"] == "nana" && (userinfo["password"]).(float64) == 123456){
-		result,_ = json.Marshal(Success{Code:0,Message:"login ok"})
-		return string(result),nil
+	userinfo["id"] = 0
+	userinfo["status"] = 1
+	userinfo["createTime"] = time.Now().Unix()
+
+	user := model.NewUserModel(userinfo)
+	id,err := user.Create()
+	if err != nil {
+		return "",tp.NewStatus(1001, "mysql error", err.Error())
 	}
 
-	result,_ = json.Marshal(Error{Code:1001,Message:"username or password is not correct"})
+	var result []byte
+
+	if(id > 0){
+		result,_ = json.Marshal(Success{Code:0,Message:fmt.Sprintf("user id = %d",id)})
+	}else{
+		result,_ = json.Marshal(Error{Code:1001,Message:"register user fail"})
+	}
 	return string(result),nil
 }
 
-func (u *User) Register(arg *[]byte) (string,*tp.Status) {
-	user := model.NewUserModel(map[string]interface{}{
-		"username" : "nana",
-		"password" : "123456",
-		"status" : 1,
-		"createTime" : time.Now().Unix(),
-	})
-	id,err := user.Create()
+func (u *User) Getusers(arg *[]byte) (string,*tp.Status) {
+
+	user := model.NewUserModel(make(map[string]interface{}))
+
+	users,err := user.Select()
 	if err != nil {
-		fmt.Println(err)
+		return "",tp.NewStatus(1001, "mysql error", err.Error())
 	}
-	fmt.Println("mysql id:%d",id)
-	return "",nil
+
+	var result []byte
+	result,_ = json.Marshal(Success{Code:0,Message:"",Data:users})
+
+	return string(result),nil
+}
+
+func (u *User) Close(arg *[]byte) (interface{},*tp.Status) {
+
+	fmt.Println(<-u.Session().CloseNotify())
+	
+	return nil, nil
 }
 
 func main() {
@@ -64,10 +105,10 @@ func main() {
 	go tp.GraceSignal()
 
 	srv := tp.NewPeer(tp.PeerConfig{
-		//Network:     "quic",
 		CountTime:   true,
 		ListenPort:  9090,
-		PrintDetail: true,
+		PrintDetail: false,
+		//DefaultSessionAge: time.Second * 60,
 	})
 
 	err := srv.SetTLSConfigFromFile("cert/cert.pem", "cert/key.pem")
