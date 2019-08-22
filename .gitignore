@@ -1,3 +1,6 @@
 .idea
-src/github.com/*
+src/github.com/**
+src/golang.org/**
+src/google.golang.org/**
+src/cloud.google.com/**
 pkg

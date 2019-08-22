@@ -1,140 +1,101 @@
 package main
 
 import (
-	"fmt"
-	"time"
-	"encoding/json"
-	tp "github.com/henrylee2cn/teleport"
-	"main/model"
+	"context"
+	"net"
+	"log"
+	"strings"
+	"crypto/tls"
+	"google.golang.org/grpc"
+	pb "main/helloworld"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 )
 
-type Success struct {
-	Code int `json:"code"`
-	Message string `json:"message"`
-	Data interface{} `json:"data"`
-}
-
-type Error struct {
-	Code int `json:"code"`
-	Message string `json:"message"`
-}
-
-type User struct {
-	tp.CallCtx
-}
-
-var (
-	SessionMap []tp.CtxSession
+const (
+	port = ":50051"
 )
 
-func (u *User) Login(arg *[]byte) ([]byte,*tp.Status) {
+type server struct{}
 
-	var userinfo map[string]interface{}
-	err := json.Unmarshal(*arg,&userinfo)
-	if err != nil {
-		return []byte(""),tp.NewStatus(1001, "json parse error", err.Error())
-	}
-	
-	var result []byte
-
-	if(userinfo["username"] == "nana" && userinfo["password"] == "123456"){
-		sess := u.Session()
-		SessionMap = append(SessionMap,sess)
-
-		result,_ = json.Marshal(Success{Code:0,Message:"login success"})
-		return result,nil
-	}
-
-	result,_ = json.Marshal(Error{Code:1001,Message:"username or password is not correct"})
-	return result,nil
+func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
+	log.Printf("Received: %v", in.Name)
+	return &pb.HelloReply{Message: "Hello " + in.Name}, nil
 }
 
-func (u *User) Register(arg *[]byte) (string,*tp.Status) {
-
-	var userinfo map[string]interface{}
-	err := json.Unmarshal(*arg,&userinfo)
-	if err != nil {
-		return "",tp.NewStatus(1001, "json parse error", err.Error())
-	}
-
-	userinfo["id"] = 0
-	userinfo["status"] = 1
-	userinfo["createTime"] = time.Now().Unix()
-
-	user := model.NewUserModel(userinfo)
-	id,err := user.Create()
-	if err != nil {
-		return "",tp.NewStatus(1001, "mysql error", err.Error())
-	}
-
-	var result []byte
-
-	if(id > 0){
-		result,_ = json.Marshal(Success{Code:0,Message:fmt.Sprintf("user id = %d",id)})
-	}else{
-		result,_ = json.Marshal(Error{Code:1001,Message:"register user fail"})
-	}
-	return string(result),nil
+func (s *server) SayHelloAgain(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
+	log.Printf("Received: %v", in.Name)
+	return &pb.HelloReply{Message: "Hello again " + in.Name}, nil
 }
 
-func (u *User) Getusers(arg *[]byte) (string,*tp.Status) {
+func (s *server) ListUsers(ctx context.Context, in *pb.HelloRequest) (*pb.ListUserResult, error) {
+	log.Printf("Received: %v", in.Name)
 
-	user := model.NewUserModel(make(map[string]interface{}))
-
-	users,err := user.Select()
-	if err != nil {
-		return "",tp.NewStatus(1001, "mysql error", err.Error())
-	}
-
-	var result []byte
-	result,_ = json.Marshal(Success{Code:0,Message:"",Data:users})
-
-	return string(result),nil
+	return &pb.ListUserResult{
+		Code : 0,
+		Message : "success",
+		Data : []*pb.UserResult{
+			&pb.UserResult{
+				Id : 1,
+				Username : "Nana",
+				Password : "123456",
+			 },
+			 &pb.UserResult{
+				Id : 2,
+				Username : "King PineApple",
+				Password : "123456",
+			 },
+		},
+	},nil
 }
 
-func (u *User) Close(arg *[]byte) (interface{},*tp.Status) {
-
-	fmt.Println(<-u.Session().CloseNotify())
-	
-	return nil, nil
-}
-
-func main() {
-	defer tp.FlushLogger()
-
-	go tp.GraceSignal()
-
-	srv := tp.NewPeer(tp.PeerConfig{
-		CountTime:   true,
-		ListenPort:  9090,
-		PrintDetail: false,
-		//DefaultSessionAge: time.Second * 60,
-	})
-
-	err := srv.SetTLSConfigFromFile("cert/cert.pem", "cert/key.pem")
+func main()  {
+	lis, err := net.Listen("tcp", port)
 	if err != nil {
-		tp.Fatalf("%v", err)
+		log.Fatalf("failed to listen: %v", err)
 	}
 
-	srv.RouteCall(new(User))
+	cert, err := tls.LoadX509KeyPair("my_authorized/server.pem", "my_authorized/server.key")
+	if err != nil {
+		log.Fatalf("failed to load key pair: %s", err)
+	}
 
-	go func() {
-		for {
-			time.Sleep(time.Second * 5)
-			var session_id string
-			srv.RangeSession(func(sess tp.Session) bool {
-				session_id = sess.ID()
-				// sess.Push(
-				// 	"/push/status",
-				// 	fmt.Sprintf("this is a broadcast, server time: %v", time.Now()),
-				// )
-				return true
-			})
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(EnsureValidToken),
+		grpc.Creds(credentials.NewServerTLSFromCert(&cert)),
+	}
 
-			//sess,ok := srv.GetSession(session_id)
-			//fmt.Println(sess,ok)
-		}
-	}()
+	s := grpc.NewServer(opts...)
+	pb.RegisterGreeterServer(s, &server{})
 
-	srv.ListenAndServe()
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("failed to serve: %v", err)
+	}
+}
+
+func EnsureValidToken(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "missing metadata")
+	}
+
+	if !Valid(md["authorization"]){
+		return nil, status.Errorf(codes.Unauthenticated, "invalid token")
+	}
+
+	return handler(ctx,req)
+}
+
+func Valid(authorization []string) bool {
+	if len(authorization) == 0 {
+		return false
+	}
+
+	log.Printf("authorization:%s",authorization[0])
+
+	token := strings.TrimPrefix(authorization[0],"Bearer ")
+
+	return token == "some-secret-token"
 }
