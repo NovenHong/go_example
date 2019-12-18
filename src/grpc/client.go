@@ -10,6 +10,7 @@ import(
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc/credentials/oauth"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -21,10 +22,17 @@ func main() {
 
 	creds, err := credentials.NewClientTLSFromFile("my_authorized/server.pem", "www.test.com")
 
+	kacp := keepalive.ClientParameters{
+		Time:                10 * time.Second, // send pings every 10 seconds if there is no activity
+		Timeout:             time.Second,      // wait 1 second for ping ack before considering the connection dead
+		PermitWithoutStream: true,             // send pings even without active streams
+	}
+
 	opts := []grpc.DialOption{
 		grpc.WithPerRPCCredentials(oauth.NewOauthAccess(GetToken())),
 		//grpc.WithInsecure(),
 		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(kacp),
 	}
 
 	conn, err := grpc.Dial(address, opts...)
@@ -63,6 +71,8 @@ func main() {
 		log.Println(user)
 	}
 
+
+	select {} // Block forever; run with GODEBUG=http2debug=2 to observe ping frames and GOAWAYs due to idleness.
 }
 
 func GetToken() *oauth2.Token {

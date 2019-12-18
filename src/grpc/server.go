@@ -6,12 +6,14 @@ import (
 	"log"
 	"strings"
 	"crypto/tls"
+	"time"
 	"google.golang.org/grpc"
 	pb "main/helloworld"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -57,6 +59,18 @@ func main()  {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	kaep := keepalive.EnforcementPolicy{
+		MinTime:             5 * time.Second, // If a client pings more than once every 5 seconds, terminate the connection
+		PermitWithoutStream: true,            // Allow pings even when there are no active streams
+	}
+	kasp := keepalive.ServerParameters{
+		MaxConnectionIdle:     15 * time.Second, // If a client is idle for 15 seconds, send a GOAWAY
+		MaxConnectionAge:      30 * time.Second, // If any connection is alive for more than 30 seconds, send a GOAWAY
+		MaxConnectionAgeGrace: 5 * time.Second,  // Allow 5 seconds for pending RPCs to complete before forcibly closing connections
+		Time:                  5 * time.Second,  // Ping the client if it is idle for 5 seconds to ensure the connection is still active
+		Timeout:               1 * time.Second,  // Wait 1 second for the ping ack before assuming the connection is dead
+	}
+
 	cert, err := tls.LoadX509KeyPair("my_authorized/server.pem", "my_authorized/server.key")
 	if err != nil {
 		log.Fatalf("failed to load key pair: %s", err)
@@ -65,6 +79,8 @@ func main()  {
 	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(EnsureValidToken),
 		grpc.Creds(credentials.NewServerTLSFromCert(&cert)),
+		grpc.KeepaliveEnforcementPolicy(kaep),
+		grpc.KeepaliveParams(kasp),
 	}
 
 	s := grpc.NewServer(opts...)
